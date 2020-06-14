@@ -1107,81 +1107,85 @@ function update_registries(ctx::Context, regs::Vector{RegistrySpec} = collect_re
     !force && UPDATED_REGISTRY_THIS_SESSION[] && return
     errors = Tuple{String, String}[]
     registry_urls = nothing
-    for reg in unique(r -> r.uuid, find_installed_registries(ctx, regs))
-        regpath = pathrepr(reg.path)
-        if isfile(joinpath(reg.path, ".tree_info.toml"))
-            printpkgstyle(ctx, :Updating, "registry at " * regpath)
-            tree_info = TOML.parsefile(joinpath(reg.path, ".tree_info.toml"))
-            old_hash = tree_info["git-tree-sha1"]
-            url, registry_urls = pkg_server_registry_url(reg.uuid, registry_urls)
-            if url !== nothing && (new_hash = pkg_server_url_hash(url)) != old_hash
-                # TODO: update faster by using a diff, if available
-                mktempdir() do tmp
-                    try
-                        download_verify_unpack(url, nothing, tmp, ignore_existence = true)
-                    catch err
-                        @warn "could not download $url"
+    for reg in unique(r -> r.uuid, find_installed_registries(ctx, regs); seen=Set{Union{UUID,Nothing}}())
+        let reg=reg
+            regpath = pathrepr(reg.path)
+            if isfile(joinpath(reg.path, ".tree_info.toml"))
+                printpkgstyle(ctx, :Updating, "registry at " * regpath)
+                tree_info = TOML.parsefile(joinpath(reg.path, ".tree_info.toml"))
+                old_hash = tree_info["git-tree-sha1"]
+                url, registry_urls = pkg_server_registry_url(reg.uuid, registry_urls)
+                if url !== nothing && (new_hash = pkg_server_url_hash(url)) != old_hash
+                    let new_hash=new_hash
+                        # TODO: update faster by using a diff, if available
+                        mktempdir() do tmp
+                            try
+                                download_verify_unpack(url, nothing, tmp, ignore_existence = true)
+                            catch err
+                                @warn "could not download $url"
+                            end
+                            tree_info_file = joinpath(tmp, ".tree_info.toml")
+                            ispath(tree_info_file) &&
+                                error("tree info file $tree_info_file already exists")
+                            open(tree_info_file, write=true) do io
+                                println(io, "git-tree-sha1 = ", repr(new_hash))
+                            end
+                            registry_file = joinpath(tmp, "Registry.toml")
+                            registry = read_registry(registry_file; cache=false)
+                            verify_registry(registry)
+                            cp(tmp, reg.path, force=true)
+                        end
                     end
-                    tree_info_file = joinpath(tmp, ".tree_info.toml")
-                    ispath(tree_info_file) &&
-                        error("tree info file $tree_info_file already exists")
-                    open(tree_info_file, write=true) do io
-                        println(io, "git-tree-sha1 = ", repr(new_hash))
-                    end
-                    registry_file = joinpath(tmp, "Registry.toml")
-                    registry = read_registry(registry_file; cache=false)
-                    verify_registry(registry)
-                    cp(tmp, reg.path, force=true)
                 end
-            end
-        elseif isdir(joinpath(reg.path, ".git"))
-            printpkgstyle(ctx, :Updating, "registry at " * regpath)
-            # Using LibGit2.with here crashes julia when running the
-            # tests for PkgDev wiht "Unreachable reached".
-            # This seems to work around it.
-            repo = nothing
-            try
-                repo = LibGit2.GitRepo(reg.path)
-                if LibGit2.isdirty(repo)
-                    push!(errors, (regpath, "registry dirty"))
-                    @goto done
-                end
-                if !LibGit2.isattached(repo)
-                    push!(errors, (regpath, "registry detached"))
-                    @goto done
-                end
-                if !("origin" in LibGit2.remotes(repo))
-                    push!(errors, (regpath, "origin not in the list of remotes"))
-                    @goto done
-                end
-                branch = LibGit2.headname(repo)
+            elseif isdir(joinpath(reg.path, ".git"))
+                printpkgstyle(ctx, :Updating, "registry at " * regpath)
+                # Using LibGit2.with here crashes julia when running the
+                # tests for PkgDev wiht "Unreachable reached".
+                # This seems to work around it.
+                repo = nothing
                 try
-                    GitTools.fetch(ctx, repo; refspecs=["+refs/heads/$branch:refs/remotes/origin/$branch"])
-                catch e
-                    e isa PkgError || rethrow()
-                    push!(errors, (reg.path, "failed to fetch from repo"))
-                    @goto done
-                end
-                ff_succeeded = try
-                    LibGit2.merge!(repo; branch="refs/remotes/origin/$branch", fastforward=true)
-                catch e
-                    e isa LibGit2.GitError && e.code == LibGit2.Error.ENOTFOUND || rethrow()
-                    push!(errors, (reg.path, "branch origin/$branch not found"))
-                    @goto done
-                end
-
-                if !ff_succeeded
-                    try LibGit2.rebase!(repo, "origin/$branch")
-                    catch e
-                        e isa LibGit2.GitError || rethrow()
-                        push!(errors, (reg.path, "registry failed to rebase on origin/$branch"))
+                    repo = LibGit2.GitRepo(reg.path)
+                    if LibGit2.isdirty(repo)
+                        push!(errors, (regpath, "registry dirty"))
                         @goto done
                     end
-                end
-                @label done
-            finally
-                if repo isa LibGit2.GitRepo
-                    close(repo)
+                    if !LibGit2.isattached(repo)
+                        push!(errors, (regpath, "registry detached"))
+                        @goto done
+                    end
+                    if !("origin" in LibGit2.remotes(repo))
+                        push!(errors, (regpath, "origin not in the list of remotes"))
+                        @goto done
+                    end
+                    branch = LibGit2.headname(repo)
+                    try
+                        GitTools.fetch(ctx, repo; refspecs=["+refs/heads/$branch:refs/remotes/origin/$branch"])
+                    catch e
+                        e isa PkgError || rethrow()
+                        push!(errors, (reg.path, "failed to fetch from repo"))
+                        @goto done
+                    end
+                    ff_succeeded = try
+                        LibGit2.merge!(repo; branch="refs/remotes/origin/$branch", fastforward=true)
+                    catch e
+                        e isa LibGit2.GitError && e.code == LibGit2.Error.ENOTFOUND || rethrow()
+                        push!(errors, (reg.path, "branch origin/$branch not found"))
+                        @goto done
+                    end
+
+                    if !ff_succeeded
+                        try LibGit2.rebase!(repo, "origin/$branch")
+                        catch e
+                            e isa LibGit2.GitError || rethrow()
+                            push!(errors, (reg.path, "registry failed to rebase on origin/$branch"))
+                            @goto done
+                        end
+                    end
+                    @label done
+                finally
+                    if repo isa LibGit2.GitRepo
+                        close(repo)
+                    end
                 end
             end
         end
