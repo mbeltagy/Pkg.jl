@@ -1644,8 +1644,9 @@ function diff_array(old_ctx::Union{Context,Nothing}, new_ctx::Context; manifest=
     end
     old = manifest ? load_manifest_deps(old_ctx) : load_direct_deps(old_ctx)
     # merge old and new into single array
-    all_uuids = union([pkg.uuid for pkg in old], [pkg.uuid for pkg in new])
-    return [(uuid, index_pkgs(old, uuid), index_pkgs(new, uuid)) for uuid in all_uuids]
+    T, S = Union{UUID,Nothing}, Union{PackageSpec,Nothing}
+    all_uuids = union(T[pkg.uuid for pkg in old], T[pkg.uuid for pkg in new])
+    return Tuple{T,S,S}[(uuid, index_pkgs(old, uuid), index_pkgs(new, uuid)) for uuid in all_uuids]
 end
 
 function is_package_downloaded(ctx, pkg::PackageSpec)

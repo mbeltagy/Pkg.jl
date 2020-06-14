@@ -484,7 +484,7 @@ function probe_platform_engines!(;verbose::Bool = false)
     end
 
     # Search for a compression engine
-    for (test, unpack, package, list, parse, symlink) in compression_engines
+    for (test::Cmd, unpack, package, list, parse, symlink) in compression_engines
         if probe_cmd(`$test`; verbose=verbose)
             # Set our compression command generators
             gen_unpack_cmd = unpack
@@ -612,7 +612,7 @@ function get_server_dir(url::AbstractString, server=pkg_server())
     joinpath(depots1(), "servers", m.captures[1])
 end
 
-const AUTH_ERROR_HANDLERS = []
+const AUTH_ERROR_HANDLERS = Pair{Union{String, Regex},Any}[]
 
 function handle_auth_error(url, err; verbose::Bool = false)
     handled, should_retry = false, false
@@ -681,7 +681,7 @@ function get_auth_header(url::AbstractString; verbose::Bool = false)
         @warn "auth file without access_token field" file=auth_file
         return handle_auth_error(url, "no-access-token"; verbose=verbose)
     end
-    auth_header = "Authorization: Bearer $(auth_info["access_token"])"
+    auth_header = "Authorization: Bearer $(auth_info["access_token"]::String)"
     # handle token expiration and refresh
     expires_at = Inf
     if haskey(auth_info, "expires_at")
@@ -709,7 +709,7 @@ function get_auth_header(url::AbstractString; verbose::Bool = false)
     end
     verbose && @info "Refreshing expired auth token..." file=auth_file
     tmp = tempname()
-    refresh_auth = "Authorization: Bearer $(auth_info["refresh_token"])"
+    refresh_auth = "Authorization: Bearer $(auth_info["refresh_token"]::String)"
     try download(refresh_url, tmp, auth_header=refresh_auth, verbose=verbose)
     catch err
         @warn "token refresh failure" file=auth_file url=refresh_url err=err
@@ -744,7 +744,7 @@ function get_auth_header(url::AbstractString; verbose::Bool = false)
         end
     end
     mv(tmp, auth_file, force=true)
-    return "Authorization: Bearer $(auth_info["access_token"])"
+    return "Authorization: Bearer $(auth_info["access_token"]::String)"
 end
 
 function hash_data(strs::AbstractString...)
@@ -784,7 +784,7 @@ function load_telemetry_file(file::AbstractString)
         end
     end
     # bail early if fully opted out
-    get(info, "telemetry", true) == false && return info
+    get(info, "telemetry", true) === false && return info
     # some validity checking helpers
     is_valid_uuid(x) = false
     is_valid_salt(x) = false
@@ -877,16 +877,19 @@ function get_telemetry_headers(url::AbstractString, notify::Bool=true)
     system = Pkg.BinaryPlatforms.triplet(Pkg.BinaryPlatforms.platform_key_abi())
     push!(headers, "Julia-System: $system")
     # install-specific information
-    if info["client_uuid"] != false
-        push!(headers, "Julia-Client-UUID: $(info["client_uuid"])")
-        if info["secret_salt"] != false
-            project_hash = hash_data("project", Base.active_project(), info["secret_salt"])
+    if info["client_uuid"] !== false
+        client_uuid = info["client_uuid"]::String
+        push!(headers, "Julia-Client-UUID: $client_uuid")
+        if info["secret_salt"] !== false
+            secret_salt = info["secret_salt"]::String
+            salt_hash = hash_data("salt", client_uuid, secret_salt)
+            project_hash = hash_data("project", Base.active_project(), secret_salt)
             push!(headers, "Julia-Project-Hash: $project_hash")
         end
     end
     # CI indicator variables
     ci_variables = get(info, "ci_variables", CI_VARIABLES)
-    ci_variables == true && (ci_variables = CI_VARIABLES)
+    ci_variables === true && (ci_variables = CI_VARIABLES)
     if ci_variables != false
         ci_info = String[]
         for var in CI_VARIABLES ∩ map(uppercase, ci_variables)
