@@ -696,7 +696,7 @@ function download_source(ctx::Context, pkgs::Vector{PackageSpec},
     ########################################
     # Install from archives asynchronously #
     ########################################
-    jobs = Channel(ctx.num_concurrent_downloads);
+    jobs = Channel{eltype(pkgs_to_install)}(ctx.num_concurrent_downloads);
     results = Channel(ctx.num_concurrent_downloads);
     @async begin
         for pkg in pkgs_to_install
@@ -738,7 +738,7 @@ function download_source(ctx::Context, pkgs::Vector{PackageSpec},
 
     missed_packages = Tuple{PackageSpec, String}[]
     for i in 1:length(pkgs_to_install)
-        pkg, exc_or_success, bt_or_path = take!(results)
+        pkg::PackageSpec, exc_or_success, bt_or_path = take!(results)
         exc_or_success isa Exception && pkgerror("Error when installing package $(pkg.name):\n",
                                                  sprint(Base.showerror, exc_or_success, bt_or_path))
         success, path = exc_or_success, bt_or_path
