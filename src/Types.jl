@@ -292,9 +292,9 @@ function EnvCache(env::Union{Nothing,String}=nothing)
     end
     # determine manifest file
     dir = abspath(project_dir)
-    manifest_file = project.manifest !== nothing ?
-        abspath(project.manifest) :
-        manifestfile_path(dir)
+    manifest_file = project.manifest
+    manifest_file = manifest_file !== nothing ?
+        abspath(manifest_file) : manifestfile_path(dir)::String
     write_env_usage(manifest_file, "manifest_usage.toml")
     manifest = read_manifest(manifest_file)
     uuids = Dict{String,Vector{UUID}}()
